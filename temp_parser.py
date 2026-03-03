@@ -37,6 +37,28 @@ from dataclasses import dataclass, fields, astuple
 # Модуль дозволяє читати та записувати дані в CSV файл
 import csv
 
+# Вбудований модуль для логування подій
+import logging
+
+# Модуль для роботи з системними функціями
+import sys
+
+# Конфігуруємо систему логування
+logging.basicConfig(
+    # Рівень логування (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+    level=logging.INFO,
+    # Формат виводу повідомлень:
+    # [РІВЕНЬ]: Повідомлення
+    format="[%(levelname)s]: %(message)s",
+    # Обробники для виводу логів:
+    handlers=[
+        # Запис в файл parser.log з кодуванням UTF-8
+        logging.FileHandler("parser.log", encoding="utf-8"),
+        # Вивід логів в консоль (stdout)
+        logging.StreamHandler(sys.stdout),
+    ]
+)
+
 @dataclass
 class Product:
     # Назва товару
@@ -153,21 +175,12 @@ def get_home_products() -> list[Product]:
 
     # Обробка помилок, пов'язаних з HTTP або мережею
     except requests.exceptions.RequestException as e:
-        print(f"❌ Помилка при виконанні запиту: {e}")
-        return None
-    # Обробка будь-яких інших неочікуваних помилок
-    except Exception as e:
-        print(f"⚠️ Неочікувана помилка: {e}")
-        return None
+        logging.error(f"Помилка при виконанні запиту до HOME_URL: {e}")
+        return []
 
-    # Обробка помилок, пов'язаних з HTTP або мережею
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Помилка при виконанні запиту: {e}")
-        return None
-    # Обробка будь-яких інших неочікуваних помилок
     except Exception as e:
-        print(f"⚠️ Неочікувана помилка: {e}")
-        return None
+        logging.warning(f"Неочікувана помилка в get_home_products(): {e}")
+        return []
 
 def parse_single_product(product: Tag) -> Product:
     return Product(
@@ -213,40 +226,37 @@ def parse_single_product(product: Tag) -> Product:
 
 def get_laptop_page_products() -> list[Product]:
     """
-    Отримує всі товари з усіх сторінок категорії ноутбуків.
+    Отримує всі товари з усіх сторінок категорії ноутбуків з логуванням.
 
     Використовує:
     - HTTP-сесію для стабільних запитів
     - Заголовки для імітації браузера
     - Функцію get_single_page_products() для парсингу кожної сторінки
     - Функцію get_num_pages() для визначення загальної кількості сторінок
+    - logging для відстеження прогресу та помилок
 
     Returns:
         list[Product]: Повний список товарів з усіх сторінок
     """
-
-    # Завантажуємо першу сторінку через HTTP-сесію
     try:
+        # Завантажуємо першу сторінку через HTTP-сесію
         response = session.get(LAPTOP_URL, headers=HEADERS, timeout=10, verify=True)
-
-        # Перевіряємо, чи запит пройшов успішно (код 200 OK)
         response.raise_for_status()
 
         # Створюємо об'єкт BeautifulSoup для парсингу HTML
         first_page_soup = BeautifulSoup(response.content, features="html.parser")
 
         # Отримуємо товари з першої сторінки
-        # Створюємо загальний спискок товарів (all_products)
         all_products = get_single_page_products(first_page_soup)
 
         # Визначаємо загальну кількість сторінок в категорії
         num_pages = get_num_pages(first_page_soup)
-        print(f"Кількість сторінок з товарами: {num_pages} ")
-        print(f"Обробляємо сторінку 1 з {num_pages}")
+        logging.info(f"Всього знайдено сторінок: {num_pages}")
+        logging.info(f"Початок парсингу сторінки 1 з {num_pages}")
 
         # Обробляємо решту сторінок (починаючи з 2 сторінки)
         for page_num in range(2, num_pages + 1):
-            print(f"Обробляємо сторінку {page_num} з {num_pages}")
+            logging.info(f"Початок парсингу сторінки {page_num} з {num_pages}")
 
             # Завантажуємо наступну сторінку через параметр пагінації
             response = session.get(
@@ -261,17 +271,17 @@ def get_laptop_page_products() -> list[Product]:
             # Парсимо наступну сторінку
             next_page_soup = BeautifulSoup(response.content, features="html.parser")
             # Додаємо товари до загального списку all_products
-            all_products.extend(get_single_page_products(next_page_soup))
+            page_products = get_single_page_products(next_page_soup)
+            all_products.extend(page_products)
 
-        print(f"Кількість товарів: {len(all_products)}")
-        # Повертаємо повний список товарів
+        logging.info(f"Всього знайдено товарів: {len(all_products)}")
         return all_products
 
     except requests.exceptions.RequestException as e:
-        print(f"❌ Помилка при завантаженні сторінок: {e}")
+        logging.error(f"Помилка при завантаженні сторінок: {e}")
         return []
     except Exception as e:
-        print(f"⚠️ Неочікувана помилка: {e}")
+        logging.warning(f"Неочікувана помилка: {e}")
         return []
 
 
@@ -348,12 +358,12 @@ def main():
     try:
         # Отримуємо товари та зберігаємо їх в CSV
         write_products_to_csv(get_laptop_page_products())
-        print("✅ Дані успішно збережено в файл 'products.csv'")
+        logging.info("Дані успішно збережено в файл 'products.csv'")
 
     except KeyboardInterrupt:
-        print("\n🛑 Роботу програми перервано користувачем.")
+        logging.warning("Роботу програми перервано користувачем")
     except Exception as e:
-        print(f"❌ Критична помилка: {e}")
+        logging.critical(f"Критична помилка виконання програми: {e}")
     finally:
         session.close()
 
