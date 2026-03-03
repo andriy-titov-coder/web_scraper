@@ -32,7 +32,10 @@ from requests.adapters import HTTPAdapter
 # - зберігають дані у вигляді атрибутів
 # - автоматично генерують методи __init__, __repr__, __eq__ та ін.
 # - роблять код більш чистим та зручним для обробки структурованих даних
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, astuple
+
+# Модуль дозволяє читати та записувати дані в CSV файл
+import csv
 
 @dataclass
 class Product:
@@ -47,6 +50,9 @@ class Product:
     # Кількість відгуків про товар
     num_of_reviews: int
 
+# Отримуємо імена всіх полів класу Product для використання в CSV-заголовку,
+# що дозволить автоматично оновлювати заголовки, якщо ми змінимо модель даних
+PRODUCT_FIELDS = [field.name for field in fields(Product)]
 
 # Створюємо об'єкт генератора випадкових User-Agent
 # Кожен виклик user_agent.random повертає інший User-Agent браузера
@@ -87,6 +93,9 @@ BASE_URL = "https://webscraper.io/"
 # urljoin поєднує базовий URL та відносний шлях,
 # гарантуючи коректну адресу незалежно від слешів
 HOME_URL = urljoin(BASE_URL, "test-sites/e-commerce/allinone/")
+
+# Формуємо URL сторінки з ноутбуками, використовуючи базовий URL
+LAPTOP_URL = urljoin(BASE_URL, "test-sites/e-commerce/static/computers/laptops/")
 
 # HTTP-заголовки імітують поведінку реального браузера
 HEADERS = {
@@ -202,32 +211,79 @@ def parse_single_product(product: Tag) -> Product:
         )
     )
 
+def get_laptop_page_products() -> list[Product]:
+    """
+    Завантажує сторінку з ноутбуками та парсить інформацію про товари
+    Використовує HTTP-сесію та заголовки для стабільності
+
+    Returns:
+        list[Product]: Список об'єктів Product з даними про ноутбуки
+    """
+    try:
+        # Виконуємо HTTP GET-запит через сесію з заголовками
+        response = session.get(
+            LAPTOP_URL,
+            headers=HEADERS,
+            timeout=10,
+            verify=True
+        )
+        response.raise_for_status()
+
+        # Створюємо об'єкт BeautifulSoup для парсингу HTML
+        soup = BeautifulSoup(response.content, features="html.parser")
+
+        # Знаходимо всі контейнери (блоки) з товарами на сторінці
+        products = soup.select(".card-body")
+
+        # Перетворюємо кожен HTML-елемент у об'єкт Product
+        return [parse_single_product(product) for product in products]
+
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Помилка при виконанні запиту: {e}")
+        return None
+    except Exception as e:
+        print(f"⚠️ Неочікувана помилка: {e}")
+        return None
+
+
+
+def write_products_to_csv(products: list[Product]) -> None:
+    """
+    Зберігає список товарів в CSV-файл
+
+    Args:
+        products: Список об'єктів Product для збереження
+    """
+    # Відкриваємо файл для запису
+    with open("products.csv", "w", newline='', encoding='utf-8') as f:
+        # Створюємо об'єкт writer для запису даних в CSV
+        writer = csv.writer(f)
+
+        # Записуємо заголовки стовпців
+        writer.writerow(PRODUCT_FIELDS)
+
+        # Записуємо дані кожного товару
+        # (astuple перетворює об'єкт Product в кортеж значень)
+        writer.writerows([astuple(product) for product in products])
 
 
 def main():
     """
-    Головна функція, яка керує логікою роботи парсера
-    Виконує отримання даних, обробку помилок та закриття ресурсів.
+    Головна функція програми:
+    - Отримує список ноутбуків зі сторінки
+    - Зберігає їх у CSV-файл
+    - Обробляє помилки та закриває ресурси
     """
     try:
-        # Отримуємо список товарів
-        products = get_home_products()
-
-        if products:
-            print("✅ Дані успішно отримано та оброблено!\n")
-
-            # Виводимо інформацію про перші 3 товари для перевірки
-            for index, product in enumerate(products, 1):
-                print(f"{index}. {product}")
-        else:
-            print("❌ Не вдалося отримати дані. Перевірте підключення або спробуйте пізніше.")
+        # Отримуємо товари та зберігаємо їх в CSV
+        write_products_to_csv(get_laptop_page_products())
+        print("✅ Дані успішно збережено в файл 'products.csv'")
 
     except KeyboardInterrupt:
         print("\n🛑 Роботу програми перервано користувачем.")
     except Exception as e:
         print(f"❌ Критична помилка: {e}")
     finally:
-        # Обов'язково закриваємо сесію
         session.close()
 
 if __name__ == "__main__":
