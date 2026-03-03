@@ -213,37 +213,108 @@ def parse_single_product(product: Tag) -> Product:
 
 def get_laptop_page_products() -> list[Product]:
     """
-    Завантажує сторінку з ноутбуками та парсить інформацію про товари
-    Використовує HTTP-сесію та заголовки для стабільності
+    Отримує всі товари з усіх сторінок категорії ноутбуків.
+
+    Використовує:
+    - HTTP-сесію для стабільних запитів
+    - Заголовки для імітації браузера
+    - Функцію get_single_page_products() для парсингу кожної сторінки
+    - Функцію get_num_pages() для визначення загальної кількості сторінок
 
     Returns:
-        list[Product]: Список об'єктів Product з даними про ноутбуки
+        list[Product]: Повний список товарів з усіх сторінок
     """
+
+    # Завантажуємо першу сторінку через HTTP-сесію
     try:
-        # Виконуємо HTTP GET-запит через сесію з заголовками
-        response = session.get(
-            LAPTOP_URL,
-            headers=HEADERS,
-            timeout=10,
-            verify=True
-        )
+        response = session.get(LAPTOP_URL, headers=HEADERS, timeout=10, verify=True)
+
+        # Перевіряємо, чи запит пройшов успішно (код 200 OK)
         response.raise_for_status()
 
         # Створюємо об'єкт BeautifulSoup для парсингу HTML
-        soup = BeautifulSoup(response.content, features="html.parser")
+        first_page_soup = BeautifulSoup(response.content, features="html.parser")
 
-        # Знаходимо всі контейнери (блоки) з товарами на сторінці
-        products = soup.select(".card-body")
+        # Отримуємо товари з першої сторінки
+        # Створюємо загальний спискок товарів (all_products)
+        all_products = get_single_page_products(first_page_soup)
 
-        # Перетворюємо кожен HTML-елемент у об'єкт Product
-        return [parse_single_product(product) for product in products]
+        # Визначаємо загальну кількість сторінок в категорії
+        num_pages = get_num_pages(first_page_soup)
+        print(f"Кількість сторінок з товарами: {num_pages} ")
+        print(f"Обробляємо сторінку 1 з {num_pages}")
+
+        # Обробляємо решту сторінок (починаючи з 2 сторінки)
+        for page_num in range(2, num_pages + 1):
+            print(f"Обробляємо сторінку {page_num} з {num_pages}")
+
+            # Завантажуємо наступну сторінку через параметр пагінації
+            response = session.get(
+                LAPTOP_URL,
+                headers=HEADERS,
+                params={"page": page_num},  # параметр пагінації
+                timeout=10,
+                verify=True
+            )
+            response.raise_for_status()
+
+            # Парсимо наступну сторінку
+            next_page_soup = BeautifulSoup(response.content, features="html.parser")
+            # Додаємо товари до загального списку all_products
+            all_products.extend(get_single_page_products(next_page_soup))
+
+        print(f"Кількість товарів: {len(all_products)}")
+        # Повертаємо повний список товарів
+        return all_products
 
     except requests.exceptions.RequestException as e:
-        print(f"❌ Помилка при виконанні запиту: {e}")
-        return None
+        print(f"❌ Помилка при завантаженні сторінок: {e}")
+        return []
     except Exception as e:
         print(f"⚠️ Неочікувана помилка: {e}")
-        return None
+        return []
+
+
+def get_num_pages(page_soup: Tag) -> int:
+    """
+    Визначає загальну кількість сторінок при пагінації
+
+    Args:
+        page_soup: Об'єкт BeautifulSoup з HTML-сторінкою
+    Returns:
+        int: Кількість сторінок (за замовчуванням 1, якщо пагінація відсутня)
+    """
+
+    # Виконуємо пошук контейнера пагінації на сторінці за CSS-класом ".pagination"
+    pagination = page_soup.select_one(".pagination")
+
+    # Якщо пагінація не знайдена, повертаємо 1 (одна сторінка)
+    if pagination is None:
+        return 1
+
+    # Якщо пагінація є:
+    # - Беремо всі елементи пагінації (<li>)
+    # - Передостанній елемент зазвичай містить номер останньої сторінки (перед кнопкою "Next")
+    # - Використання [-2] гарантує, що ми беремо останній номер сторінки, а не кнопку Next.
+    # - Конвертуємо текст в ціле число
+    return int(pagination.select("li")[-2].text)
+
+
+def get_single_page_products(page_soup: Tag) -> list[Product]:
+    """
+    Парсить HTML-сторінку та повертає список товарів.
+
+    Args:
+        page_soup: Об'єкт BeautifulSoup з HTML-сторінкою
+    Returns:
+        list[Product]: Список об'єктів Product з даними про товари
+    """
+
+    # Виконуємо пошук всіх контейнерів товарів на сторінці за CSS-класом ".card-body"
+    products = page_soup.select(".card-body")
+
+    # Перетворюємо кожен HTML-елемент в об'єкт Product
+    return [parse_single_product(product) for product in products]
 
 
 
