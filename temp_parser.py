@@ -4,7 +4,7 @@ import requests
 
 # BeautifulSoup - бібліотека для парсингу HTML та XML
 # Дозволяє зручно працювати з тегами, класами, атрибутами
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 # urllib - вбудована бібліотека Python для роботи з URL-адресами
 # Функція urljoin використовується для коректного об'єднання базового URL з відносними шляхами
@@ -25,6 +25,28 @@ from urllib3.util.retry import Retry
 # HTTPAdapter - дозволяє підключити механізм Retry до requests.Session
 # Використовується для налаштування повторних запитів, таймаутів і адаптерів з'єднання
 from requests.adapters import HTTPAdapter
+
+
+# Імпортуємо декоратор dataclass для створення класів даних
+# Дозволяє створювати класи, які:
+# - зберігають дані у вигляді атрибутів
+# - автоматично генерують методи __init__, __repr__, __eq__ та ін.
+# - роблять код більш чистим та зручним для обробки структурованих даних
+from dataclasses import dataclass
+
+@dataclass
+class Product:
+    # Назва товару
+    title: str
+    # Детальний опис товару
+    description: str
+    # Ціна у вигляді числа з плаваючою точкою
+    price: float
+    # Рейтинг товару (ціле число від 1 до 5)
+    rating: int
+    # Кількість відгуків про товар
+    num_of_reviews: int
+
 
 # Створюємо об'єкт генератора випадкових User-Agent
 # Кожен виклик user_agent.random повертає інший User-Agent браузера
@@ -83,13 +105,13 @@ HEADERS = {
     'Upgrade-Insecure-Requests': '1',
 }
 
-def get_home_products():
+def get_home_products() -> list[Product]:
     """
     Завантажує HTML-код головної сторінки магазину
-    та повертає об'єкт BeautifulSoup для подальшого парсингу
+    та повертає список об'єктів Product для подальшої обробки
 
     Returns:
-        BeautifulSoup | None
+        list[Product] - список об'єктів Product або None у разі помилки
     """
     try:
         # Виконуємо HTTP GET-запит до головної сторінки
@@ -97,29 +119,28 @@ def get_home_products():
             HOME_URL,  # URL сторінки
             headers=HEADERS,  # HTTP-заголовки
             timeout=10,  # Максимальний час очікування відповіді (секунди)
-            verify=True  # Перевіряти SSL-сертифікат
+            verify=True  # Перевірка SSL-сертифікату
         )
 
         # Перевіряємо статус відповіді
-        # Якщо код 4xx або 5xx - буде згенеровано виняток
         response.raise_for_status()
 
-        # Оновлюємо User-Agent для наступного запиту,
-        # щоб кожен запит виглядав як новий користувач
+        # Генеруємо новий User-Agent для наступного запиту
         headers = HEADERS.copy()
         headers["User-Agent"] = user_agent.random
 
-        # Створимо об'єкт BeautifulSoup
-        # response.content - байти HTML, не залежить від кодування
-        # (більш надійно, ніж response.text, який декодує в str)
-        soup = BeautifulSoup(response.content, 'html.parser')
+        # Створюємо об'єкт BeautifulSoup для парсингу HTML
+        soup = BeautifulSoup(response.content, features="html.parser")
 
-        # Виводимо HTML-код з відступами
-        # ⚠️ Для великих сторінок краще закоментувати
-        print(soup.prettify())
+        # Знаходимо всі HTML-блоки товарів
+        # ".card-body" - CSS-селектор, який обгортає кожен блок з товаром на сторінці
+        products = soup.select(".card-body")
 
-        # Повертаємо об'єкт BeautifulSoup
-        return soup
+        # Перетворюємо кожен HTML-блок в об'єкт Product
+        # - викликаємо parse_single_product
+        # - перетворюємо товар в об'єкт Product
+        # В результаті отримуємо список готових Python-об'єктів
+        return [parse_single_product(product) for product in products]
 
     # Обробка помилок, пов'язаних з HTTP або мережею
     except requests.exceptions.RequestException as e:
@@ -130,25 +151,83 @@ def get_home_products():
         print(f"⚠️ Неочікувана помилка: {e}")
         return None
 
+    # Обробка помилок, пов'язаних з HTTP або мережею
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Помилка при виконанні запиту: {e}")
+        return None
+    # Обробка будь-яких інших неочікуваних помилок
+    except Exception as e:
+        print(f"⚠️ Неочікувана помилка: {e}")
+        return None
+
+def parse_single_product(product: Tag) -> Product:
+    return Product(
+        # Назва товару
+        # .select_one(".title") - шукає перший елемент з класом "title" всередині блоку товару
+        # ["title"] - використовуємо значення HTML-атрибуту 'title'
+        title=product.select_one(".title")["title"],
+
+        # Опис товару
+        # .text - повертає весь текст всередині HTML-тега
+        description=product.select_one(".description").text,
+
+        # Ціна товару
+        # .text - отримуємо рядок типу "$123.45"
+        # .replace("$", "") - прибираємо символ валюти, щоб залишилися лише цифри
+        # float(...) - перетворюємо текст в число з плаваючою крапкою
+        price=float(
+            product
+            .select_one(".price")
+            .text
+            .replace("$", "")
+        ),
+
+        # Рейтинг товару
+        # [data-rating] - HTML-атрибут з числовим значенням рейтингу
+        # int(...) - перетворюємо текстовий рейтинг в ціле число
+        rating=int(
+            product
+            .select_one("[data-rating]")["data-rating"]
+        ),
+
+        # Кількість відгуків
+        # .text - рядок типу "12 reviews"
+        # .split()[0] - розбиваємо рядок за пробілом та отримуємо перше слово ("12")
+        # int(...) - перетворюємо перше слово в число
+        num_of_reviews=int(
+            product
+            .select_one(".review-count")
+            .text
+            .split()[0]
+        )
+    )
+
+
+
 def main():
     """
-    Головна функція програми
-    Викликає основну логіку та закриває ресурси
+    Головна функція, яка керує логікою роботи парсера
+    Виконує отримання даних, обробку помилок та закриття ресурсів.
     """
     try:
-        # Отримуємо HTML-дані головної сторінки
-        soup = get_home_products()
-        return soup
+        # Отримуємо список товарів
+        products = get_home_products()
 
-    # Якщо користувач натиснув Ctrl + C
+        if products:
+            print("✅ Дані успішно отримано та оброблено!\n")
+
+            # Виводимо інформацію про перші 3 товари для перевірки
+            for index, product in enumerate(products, 1):
+                print(f"{index}. {product}")
+        else:
+            print("❌ Не вдалося отримати дані. Перевірте підключення або спробуйте пізніше.")
+
     except KeyboardInterrupt:
-        print("\n🛑 Роботу програми перервано користувачем")
-    # Ловимо будь-яку критичну помилку
+        print("\n🛑 Роботу програми перервано користувачем.")
     except Exception as e:
         print(f"❌ Критична помилка: {e}")
-    # Блок finally виконується ЗАВЖДИ
     finally:
-        # Закриваємо HTTP-сесію
+        # Обов'язково закриваємо сесію
         session.close()
 
 if __name__ == "__main__":
