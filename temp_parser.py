@@ -43,6 +43,16 @@ import logging
 # Модуль для роботи з системними функціями
 import sys
 
+# webdriver - основний модуль для керування браузером
+# Дозволяє створювати екземпляр браузера (Chrome, Firefox тощо)
+# та виконувати різні дії: навігація, кліки, отримання контенту
+from selenium import webdriver
+
+# By - клас для визначення стратегій пошуку елементів на сторінці
+# Дозволяє шукати елементи за різними критеріями:
+# - By.ID, By.CLASS_NAME, By.TAG_NAME, By.CSS_SELECTOR тощо
+from selenium.webdriver.common.by import By
+
 # Конфігуруємо систему логування
 logging.basicConfig(
     # Рівень логування (DEBUG, INFO, WARNING, ERROR, CRITICAL)
@@ -59,6 +69,8 @@ logging.basicConfig(
     ]
 )
 
+
+
 @dataclass
 class Product:
     # Назва товару
@@ -71,10 +83,41 @@ class Product:
     rating: int
     # Кількість відгуків про товар
     num_of_reviews: int
+    # Інформація про конфігурації товару та ціни на конфігурації
+    # Словник формату: {"назва_конфігурації": ціна}
+    additional_info: dict[str, float]
 
 # Отримуємо імена всіх полів класу Product для використання в CSV-заголовку,
 # що дозволить автоматично оновлювати заголовки, якщо ми змінимо модель даних
 PRODUCT_FIELDS = [field.name for field in fields(Product)]
+
+# Глобальна змінна для зберігання екземпляра WebDriver
+# WebDriver | None - типізація: може бути WebDriver або None
+_driver: webdriver.WebDriver | None = None
+
+
+def get_driver() -> webdriver.WebDriver:
+    """
+    Повертає поточний екземпляр WebDriver
+
+    Returns:
+        webdriver.WebDriver: активний екземпляр браузера
+
+    Raises:
+        AttributeError: якщо драйвер не був ініціалізований
+    """
+    return _driver
+
+
+def set_driver(new_driver: webdriver.WebDriver) -> None:
+    """
+    Встановлює новий екземпляр WebDriver як глобальний
+
+    Args:
+        new_driver: новий екземпляр WebDriver для використання
+    """
+    global _driver
+    _driver = new_driver
 
 # Створюємо об'єкт генератора випадкових User-Agent
 # Кожен виклик user_agent.random повертає інший User-Agent браузера
@@ -183,10 +226,17 @@ def get_home_products() -> list[Product]:
         return []
 
 def parse_single_product(product: Tag) -> Product:
+    """
+    Парсить HTML-блок товару та створює об'єкт Product
+    з інформацією про конфігурації та їх ціни
+    """
+    # Отримуємо ціни конфігурацій за допомогою Selenium
+    hdd_prices = parse_hdd_block_prices(product)
+
     return Product(
         # Назва товару
         # .select_one(".title") - шукає перший елемент з класом "title" всередині блоку товару
-        # ["title"] - використовуємо значення HTML-атрибуту 'title'
+        # ["title"] - використовуємо значення HTML-атрибуту title (повна назва)
         title=product.select_one(".title")["title"],
 
         # Опис товару
@@ -221,8 +271,13 @@ def parse_single_product(product: Tag) -> Product:
             .select_one(".review-count")
             .text
             .split()[0]
-        )
+        ),
+
+        # Додаткова інформація про конфігурації товару
+        # Зберігаємо ціни всіх доступних конфігурацій HDD
+        additional_info={"hdd_prices": hdd_prices}
     )
+
 
 def get_laptop_page_products() -> list[Product]:
     """
@@ -327,6 +382,74 @@ def get_single_page_products(page_soup: Tag) -> list[Product]:
     return [parse_single_product(product) for product in products]
 
 
+def parse_hdd_block_prices(product_soup: Tag) -> dict[str, float]:
+    """
+    Парсить блок з конфігураціями HDD на сторінці продукту
+    та повертає словник {конфігурація: ціна}.
+
+    Функція виконує наступні дії:
+    - Переходить на сторінку товару
+    - Знаходить блок з кнопками конфігурацій
+    - По черзі клікає на кожну активну кнопку
+    - Отримує оновлену ціну після кожного кліку
+    - Зберігає результат в словник
+
+    Args:
+        product_soup: BeautifulSoup об'єкт блоку товару
+
+    Returns:
+        dict[str, float]: словник з конфігураціями та їх цінами
+                         Порожній словник в разі помилки
+    """
+    try:
+        # Формуємо повну URL-адресу сторінки товару
+        # urljoin коректно об'єднує базовий URL з відносним шляхом
+        absolute_url = urljoin(BASE_URL, product_soup.select_one(".title")["href"])
+
+        # Отримуємо глобальний екземпляр WebDriver
+        driver = get_driver()
+
+        # Переходимо на сторінку конкретного товару
+        driver.get(absolute_url)
+
+        # Знаходимо блок з кнопками конфігурацій (swatches)
+        # .swatches - CSS-клас блоку з варіантами вибору
+        swatches = driver.find_element(By.CLASS_NAME, "swatches")
+
+        # Отримуємо всі кнопки конфігурацій з блоку
+        buttons = swatches.find_elements(By.TAG_NAME, "button")
+
+        # Словник для зберігання результатів: {конфігурація: ціна}
+        prices = {}
+
+        # Перебираємо всі кнопки конфігурацій
+        for button in buttons:
+            # Перевіряємо, чи кнопка активна (не заблокована)
+            if not button.get_property("disabled"):
+                # Клікаємо на кнопку для вибору конфігурації
+                button.click()
+
+                # Отримуємо оновлену ціну після вибору конфігурації
+                price_text = driver.find_element(By.CLASS_NAME, "price").text
+                # Прибираємо символ долара та перетворюємо в число
+                price_value = float(price_text.replace("$", ""))
+
+                # Отримуємо назву конфігурації з атрибута value кнопки
+                config_name = button.get_property("value")
+
+                # Зберігаємо результат у словник
+                prices[config_name] = price_value
+
+                # ✅ Логування успішно зчитаної конфігурації та ціни
+                logging.info(f"HDD конфігурація '{config_name}' → ${price_value}")
+
+        return prices
+
+    except Exception as e:
+        # ⚠️ Логування помилки, якщо не вдалось зчитати блок конфігурацій
+        logging.warning(f"Помилка при парсингу HDD блоків: {e}")
+        # Повертаємо порожній словник у разі помилки
+        return {}
 
 def write_products_to_csv(products: list[Product]) -> None:
     """
@@ -351,21 +474,38 @@ def write_products_to_csv(products: list[Product]) -> None:
 def main():
     """
     Головна функція програми:
-    - Отримує список ноутбуків зі сторінки
+    - Ініціалізує WebDriver для динамічного парсингу
+    - Отримує список товарів з цінами конфігурацій
     - Зберігає їх у CSV-файл
-    - Обробляє помилки та закриває ресурси
+    - Обробляє помилки та коректно закриває ресурси
     """
     try:
-        # Отримуємо товари та зберігаємо їх в CSV
-        write_products_to_csv(get_laptop_page_products())
-        logging.info("Дані успішно збережено в файл 'products.csv'")
+        # Створюємо екземпляр Chrome WebDriver
+        # with statement гарантує автоматичне закриття браузера
+        with webdriver.Chrome() as driver:
+            # Встановлюємо драйвер як глобальний для використання в інших функціях
+            set_driver(driver)
 
+            # Отримуємо товари та зберігаємо їх в CSV
+            products = get_laptop_page_products()
+            write_products_to_csv(products)
+
+            # ✅ Логування успішного завершення парсингу
+            logging.info(f"Успішно обработано {len(products)} товарів з конфігураціями")
+
+    # Обробка переривання програми користувачем (Ctrl+C)
     except KeyboardInterrupt:
         logging.warning("Роботу програми перервано користувачем")
+    # Обробка будь-яких інших критичних помилок
     except Exception as e:
         logging.critical(f"Критична помилка виконання програми: {e}")
+    # Блок finally виконується ЗАВЖДИ, навіть при помилках
     finally:
+        # Закриваємо HTTP-сесію для звільнення ресурсів
         session.close()
+        logging.info("Ресурси програми успішно звільнено")
+
+
 
 if __name__ == "__main__":
     main()
